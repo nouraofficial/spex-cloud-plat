@@ -1,3 +1,23 @@
-import {NextResponse} from "next/server";import crypto from "crypto";import {createClient} from "@supabase/supabase-js";
+import {NextResponse} from "next/server";
+import crypto from "crypto";
+import {createClient} from "@supabase/supabase-js";
+
 const admin=()=>createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.SUPABASE_SERVICE_ROLE_KEY!,{auth:{autoRefreshToken:false,persistSession:false}});
-export async function POST(req:Request,{params}:{params:{token:string}}){const a=admin();const hash=crypto.createHash("sha256").update(params.token).digest("hex");const {data:s}=await a.from("shares").select("*,files(name,storage_path,mime_type)").eq("token_hash",hash).single();if(!s||s.revoked)return NextResponse.json({error:"Share revoked or not found."},{status:404});if(s.expires_at&&new Date(s.expires_at)<=new Date())return NextResponse.json({error:"This share has expired."},{status:410});if(s.max_views&&s.view_count>=s.max_views)return NextResponse.json({error:"This share has already been viewed."},{status:410});const body=await req.json().catch(()=>({}));if(s.pin_hash){const supplied=crypto.createHash("sha256").update(String(body.pin||"")).digest("hex");if(supplied!==s.pin_hash)return NextResponse.json({error:"Incorrect PIN."},{status:403})}const {data:urlData,error}=await a.storage.from("spex-files").createSignedUrl(s.files.storage_path,90);if(error)return NextResponse.json({error:"Could not open file."},{status:500});const nextViews=(s.view_count||0)+1;await a.from("shares").update({view_count:nextViews,last_viewed_at:new Date().toISOString()}).eq("id",s.id);if(s.one_time||s.max_views===1)await a.from("shares").update({revoked:true}).eq("id",s.id);return NextResponse.json({url:urlData.signedUrl,name:s.files.name,mimeType:s.files.mime_type})}
+
+export async function POST(req:Request,{params}:{params:Promise<{token:string}>}){
+  const a=admin();
+  const {token}=await params;
+  const hash=crypto.createHash("sha256").update(token).digest("hex");
+  const {data:s}=await a.from("shares").select("*,files(name,storage_path,mime_type)").eq("token_hash",hash).single();
+  if(!s||s.revoked)return NextResponse.json({error:"Share revoked or not found."},{status:404});
+  if(s.expires_at&&new Date(s.expires_at)<=new Date())return NextResponse.json({error:"This share has expired."},{status:410});
+  if(s.max_views&&s.view_count>=s.max_views)return NextResponse.json({error:"This share has already been viewed."},{status:410});
+  const body=await req.json().catch(()=>({}));
+  if(s.pin_hash){const supplied=crypto.createHash("sha256").update(String(body.pin||"")).digest("hex");if(supplied!==s.pin_hash)return NextResponse.json({error:"Incorrect PIN."},{status:403})}
+  const {data:urlData,error}=await a.storage.from("spex-files").createSignedUrl(s.files.storage_path,90);
+  if(error)return NextResponse.json({error:"Could not open file."},{status:500});
+  const nextViews=(s.view_count||0)+1;
+  await a.from("shares").update({view_count:nextViews,last_viewed_at:new Date().toISOString()}).eq("id",s.id);
+  if(s.one_time||s.max_views===1)await a.from("shares").update({revoked:true}).eq("id",s.id);
+  return NextResponse.json({url:urlData.signedUrl,name:s.files.name,mimeType:s.files.mime_type});
+}
